@@ -1,0 +1,119 @@
+name: backtest
+
+# Manual only. Replays historical sessions into cache/backtest.db, which is
+# separate from the live journal on purpose - a biased replay must never be
+# able to poison what the bot learned from real sessions.
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First session (YYYY-MM-DD)"
+        required: true
+      end:
+        description: "Last session (YYYY-MM-DD)"
+        required: true
+      feed:
+        description: "iex matches live and is what to train on; sip measures what iex misses"
+        required: false
+        default: "iex"
+        type: choice
+        options: ["iex", "sip"]
+      commit:
+        description: "Commit the resulting backtest journal (true/false)"
+        required: false
+        default: "true"
+      fresh:
+        description: "Delete the journal before replaying - required whenever grading changed (true/false)"
+        required: false
+        default: "false"
+      trades:
+        description: "Simulate the trades the bot would have taken, not just the alerts (true/false)"
+        required: false
+        default: "false"
+      no_news:
+        description: "Drop Ross's catalyst requirement, to see how many more setups exist (true/false)"
+        required: false
+        default: "false"
+      settings:
+        description: "Config changes for this run, space separated KEY=VALUE (e.g. hod_min_price=2 bot_scalp_scale_out_pct=100)"
+        required: false
+        default: ""
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Bars and news for a past date never change, and refetching thousands
+      # of symbol-days at 200 req/min dominates the runtime. The store is
+      # keyed per day internally and only ever grows, so the key is the run
+      # id and the restore-key is the feed: each month restores everything
+      # fetched so far and saves the union. Keying on the window instead
+      # would make every month start from an empty cache.
+      - name: Cache fetched history
+        uses: actions/cache@v4
+        with:
+          path: cache/backtest
+          key: bt-${{ inputs.feed }}-${{ github.run_id }}
+          restore-keys: bt-${{ inputs.feed }}-
+
+      # Its own cache entry: adding a path to the one above would change that
+      # cache's version and throw away months of fetched bars.
+      - name: Cache SEC country lookups
+        uses: actions/cache@v4
+        with:
+          path: cache/countries.json
+          key: countries-${{ github.run_id }}
+          restore-keys: countries-
+
+      # alerts is UNIQUE(day, symbol), so replaying a day already in the
+      # journal silently keeps its old rows. Any change to how alerts are
+      # graded - stop width, horizon, the R they are measured against -
+      # therefore needs a clean file, or the results average two different
+      # strategies with no way to tell them apart afterwards.
+      - name: Start from a clean journal
+        if: ${{ inputs.fresh == 'true' }}
+        run: rm -f cache/backtest.db
+
+      - name: Replay history
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          SEC_CONTACT: ${{ vars.SEC_CONTACT }}
+          # Through the environment, not pasted into the script: the words
+          # are split by the shell below and never evaluated.
+          SETTINGS: ${{ inputs.settings }}
+        run: |
+          overrides=()
+          for kv in $SETTINGS; do overrides+=(--set "$kv"); done
+          python -u scripts/backtest.py \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --feed "${{ inputs.feed }}" \
+            ${{ inputs.trades == 'true' && '--trades' || '' }} \
+            ${{ inputs.no_news == 'true' && '--no-news' || '' }} \
+            "${overrides[@]}"
+
+      - name: Commit the backtest journal
+        if: ${{ inputs.commit == 'true' }}
+        run: |
+          git config user.name "trade-bot"
+          git config user.email "actions@github.com"
+          git add cache/backtest.db || true
+          if ! git diff --cached --quiet; then
+            git commit -m "backtest ${{ inputs.start }}..${{ inputs.end }} (${{ inputs.feed }}) [skip ci]" --quiet
+            git pull --rebase --autostash --quiet || true
+            git push --quiet
+          fi

@@ -1,0 +1,52 @@
+name: protect
+
+# Makes sure no open position is left without a broker stop - by hand.
+#
+# Nothing needs to schedule this: the trading-session workflow runs the same
+# check as its own final job however the session ended, a lost machine
+# included. This copy is for running it manually, and for a dry run
+# (dry_run: true) that prints the plan against the real account and sends
+# nothing.
+#
+# It shares the trading-session concurrency group on purpose: while a
+# session is alive it WAITS rather than act beside a bot that is still
+# managing its own positions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the plan only - place and cancel nothing"
+        type: boolean
+        default: false
+
+concurrency: trading-session
+
+permissions:
+  contents: read
+
+jobs:
+  protect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Protect open positions
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python -u -m scanner.flatten --protect --dry-run
+          else
+            python -u -m scanner.flatten --protect
+          fi

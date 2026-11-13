@@ -1,0 +1,125 @@
+name: trading-session
+
+on:
+  schedule:
+    # 13:15 UTC = 9:15 ET in summer (8:15 ET in winter - the bot's own
+    # ET-based window gate handles the DST drift; it just idles longer).
+    - cron: "15 13 * * 1-5"
+  workflow_dispatch:
+
+concurrency: trading-session
+
+permissions:
+  contents: write
+
+jobs:
+  session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build Pages dashboard
+        run: python scripts/build_docs.py
+
+      - name: Run scanner + bot until 13:15 ET
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          SEC_CONTACT: ${{ vars.SEC_CONTACT }}
+        run: |
+          git config user.name "trade-bot"
+          git config user.email "actions@github.com"
+          # -u, or nothing reaches the log until the process exits: a
+          # six-hour session prints its whole story at 13:15 and there is
+          # no way to see what it is doing while it matters.
+          python -u -m scanner.session --until-et 13:15 &
+          SESSION_PID=$!
+          # Push fresh status + journal every 10 minutes while it runs, but
+          # check on the process every 15s: if it dies holding a pre-market
+          # position, that position has no stop until the protect step
+          # below runs, and a 10-minute sleep held that step back.
+          LAST_PUSH=$(date +%s)
+          while kill -0 $SESSION_PID 2>/dev/null; do
+            sleep 15
+            if ! kill -0 $SESSION_PID 2>/dev/null; then break; fi
+            if [ $(( $(date +%s) - LAST_PUSH )) -lt 600 ]; then continue; fi
+            LAST_PUSH=$(date +%s)
+            git add docs cache || true
+            if ! git diff --cached --quiet; then
+              git commit -m "session update [skip ci]" --quiet
+              git pull --rebase --autostash --quiet || true
+              git push --quiet || true
+            fi
+          done
+          wait $SESSION_PID
+
+      # Also after a failed session: the journal holds the day's alerts and
+      # trades, which is the learning data.
+      - name: Final commit
+        if: always()
+        run: |
+          git add docs cache || true
+          if ! git diff --cached --quiet; then
+            git commit -m "session end $(date -u +%F) [skip ci]" --quiet
+            git pull --rebase --autostash --quiet || true
+            git push --quiet
+          fi
+
+  # However the session ended - cutoff, crash, dead bot, or GitHub losing
+  # the machine it ran on - no position is left without a stop. A separate
+  # job, not a step: a lost runner takes every remaining step with it, but
+  # GitHub still starts this job on a fresh machine once it has marked the
+  # session failed. Regular-hours stops are broker orders and are found in
+  # place; a pre-market position's stop was the session itself.
+  protect:
+    needs: session
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 330   # a crash at the open waits here until 14:00
+    steps:
+      # The latest main, not the commit this run started from: the journal
+      # pushed during the session holds the stops this job needs to place.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Protect open positions
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        run: python -u -m scanner.flatten --protect
+
+      # Nothing is held past bot_flatten_time (14:00): the session ends at
+      # 13:15, so this waits and closes whatever is still open.
+      - name: Close what is left at 14:00 ET
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        run: python -u -m scanner.flatten --at-flatten-time
+
+      - name: Commit the journal
+        if: always()
+        run: |
+          git config user.name "trade-bot"
+          git config user.email "actions@github.com"
+          git add cache || true
+          if ! git diff --cached --quiet; then
+            git commit -m "14:00 close-out [skip ci]" --quiet
+            git pull --rebase --autostash --quiet || true
+            git push --quiet
+          fi

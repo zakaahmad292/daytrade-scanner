@@ -19,6 +19,11 @@ WEB, DOCS = ROOT / "web", ROOT / "docs"
 
 
 def main():
+    if not (WEB / "index.html").exists():
+        # web/ is not in the repo yet: keep the committed docs/ as they are
+        # instead of failing the trading session that runs this first.
+        print(f"no {WEB}/index.html - leaving docs/ unchanged")
+        return
     (DOCS / "static").mkdir(parents=True, exist_ok=True)
     (DOCS / "data").mkdir(parents=True, exist_ok=True)
     for name in ("style.css", "app.js"):

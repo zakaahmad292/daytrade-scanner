@@ -102,10 +102,31 @@ async def main(probe_symbols, qty=1):
             code, order = await show(session, "POST", "/v2/orders",
                                      f"probe buy {sym}", payload)
             if code < 300 and isinstance(order, dict):
-                print(f"    ACCEPTED id={order.get('id')} -> closing it back")
+                print(f"    ACCEPTED id={order.get('id')} -> undoing it")
                 await asyncio.sleep(2)
-                await show(session, "DELETE", f"/v2/positions/{sym}",
-                           f"close {sym}")
+                # Outside market hours the order rests unfilled, so cancel it
+                # first; only a filled order leaves a position to close.
+                code, _ = await show(session, "DELETE",
+                                     f"/v2/orders/{order.get('id')}",
+                                     f"cancel probe {sym}")
+                if code >= 300:
+                    await show(session, "DELETE", f"/v2/positions/{sym}",
+                               f"close {sym}")
+
+
+async def cancel_open():
+    """Cancel every open order on the paper account and list what went."""
+    async with aiohttp.ClientSession() as session:
+        _, orders = await show(session, "GET", "/v2/orders?status=open",
+                               "open orders")
+        if not isinstance(orders, list) or not orders:
+            print("    no open orders")
+            return
+        for o in orders:
+            print(f"    {o.get('symbol')} {o.get('side')} {o.get('qty')} "
+                  f"{o.get('type')} status={o.get('status')}")
+            await show(session, "DELETE", f"/v2/orders/{o.get('id')}",
+                       f"cancel {o.get('symbol')}")
 
 
 async def live_entry(symbol, qty):
@@ -401,12 +422,16 @@ if __name__ == "__main__":
     parser.add_argument("--sequence", metavar="SYMBOL",
                         help="reproduce the bot's buy-then-stop entry and "
                              "test the atomic OTO alternative, then clean up")
+    parser.add_argument("--cancel-open", action="store_true",
+                        help="cancel every open order on the paper account")
     args = parser.parse_args()
     missing = [n for n in ("ALPACA_KEY", "ALPACA_SECRET") if not os.environ.get(n)]
     if missing:
         raise SystemExit("!! missing in the environment: " + ", ".join(missing)
                          + " (add it under repo Settings > Secrets and variables > Actions)")
-    if args.news:
+    if args.cancel_open:
+        asyncio.run(cancel_open())
+    elif args.news:
         asyncio.run(news_probe([x.strip().upper()
                                 for x in args.news.split(",") if x.strip()]))
     elif args.bars:

@@ -33,6 +33,10 @@ on:
         description: "List every fill on this date (YYYY-MM-DD)"
         required: false
         default: ""
+      cancel_open:
+        description: "Cancel every open order on the paper account (true/false)"
+        required: false
+        default: "false"
       live_entry:
         description: "Symbol to run the REAL bot entry path on, then undo (blank = skip)"
         required: false
@@ -57,7 +61,9 @@ jobs:
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
         run: |
-          if [ -n "${{ inputs.news }}" ]; then
+          if [ "${{ inputs.cancel_open }}" = "true" ]; then
+            python scripts/diagnose_alpaca.py --cancel-open
+          elif [ -n "${{ inputs.news }}" ]; then
             python scripts/diagnose_alpaca.py --news "${{ inputs.news }}"
           elif [ -n "${{ inputs.bars }}" ]; then
             python scripts/diagnose_alpaca.py --bars ${{ inputs.bars }}

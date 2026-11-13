@@ -402,6 +402,10 @@ if __name__ == "__main__":
                         help="reproduce the bot's buy-then-stop entry and "
                              "test the atomic OTO alternative, then clean up")
     args = parser.parse_args()
+    missing = [n for n in ("ALPACA_KEY", "ALPACA_SECRET") if not os.environ.get(n)]
+    if missing:
+        raise SystemExit("!! missing in the environment: " + ", ".join(missing)
+                         + " (add it under repo Settings > Secrets and variables > Actions)")
     if args.news:
         asyncio.run(news_probe([x.strip().upper()
                                 for x in args.news.split(",") if x.strip()]))

@@ -1,0 +1,348 @@
+"""All tunables in one place.
+
+Thresholds follow Ross Cameron's stock-selection criteria (float, % up
+today, volume, relative volume, news). Change values here, not in the
+scanner logic.
+"""
+from dataclasses import dataclass
+
+
+@dataclass
+class Config:
+    # --- poll loop ---
+    poll_seconds: float = 3.0          # movers/actives/snapshots cycle
+    news_poll_seconds: float = 30.0
+    # Breaking-news discovery: the whole market's headlines, this often. A
+    # stock with news stays on the candidate list this long after it.
+    news_discovery_seconds: float = 10.0
+    news_candidate_minutes: float = 240.0
+    # Market sweep: snapshot every common stock that could reach the band,
+    # this often, and track any up hod_min_pct_up - a scanner's view, where
+    # the movers list shows only the top 50 and resets at the bell.
+    sweep_seconds: float = 60.0
+    calendar_poll_seconds: float = 600.0
+    movers_top: int = 50
+    actives_top: int = 100
+    candidate_ttl_minutes: int = 30    # keep tracking a symbol this long after it leaves the lists
+
+    # --- scanner 1: rolling top gainers ---
+    gainer_windows: tuple = (5, 10, 15)   # minutes
+    gainer_rows: int = 20
+
+    # --- scanner 2: HOD momentum (Ross Cameron's five criteria) ---
+    # $0.25-$5, matching the bot's band. Penny stocks from $0.25 were the
+    # user's call (2026-10-22); prices below $1 trade on $0.0001 ticks
+    # (strategy.tick). Jan-Aug 2026 IEX, same data: $1 floor 60 trades
+    # +0.258R +$272; $0.25 floor 61 trades +0.416R +$493 - the one penny
+    # trade (+9.88R) is all of the difference, so it is not evidence yet,
+    # and the replay does not model the spread, widest down there.
+    hod_min_price: float = 0.25
+    hod_max_price: float = 5.0
+    # Watched but never bought. Rows priced above hod_max_price and up to
+    # here are graded into the training set with "price" among their failed
+    # criteria, so the model learns what a $5-10 mover does without a cent
+    # being risked on one. 0 means observe only what can be traded.
+    hod_observe_max_price: float = 10.0
+    # Ross's 20M. It was widened to 50M once to manufacture trades and put
+    # back; the comment claiming 50M outlived the value by several commits.
+    #
+    # In practice this gate is STRICTER than it reads. True float needs paid
+    # data, so scanner/floats.py approximates it with shares outstanding,
+    # which counts insider and locked-up shares the market cannot buy. A
+    # company with 30M outstanding and 5M genuinely floating is rejected
+    # here, and it is exactly the stock the strategy wants. Widening the
+    # number is the wrong fix for that - it would admit real 50M floats
+    # too. The right fix is a better float source.
+    hod_max_float: float = 20_000_000   # shares (approximated by shares outstanding)
+    hod_min_pct_up: float = 10.0        # % up vs previous close
+    # Disabled (0 = no check). An absolute share count measures the wrong
+    # thing here: Ross's "100k traded" assumes the consolidated tape, but
+    # Alpaca's free feed only shows IEX's slice of it, so the number is a
+    # fraction of what the stock really traded and varies with how much of
+    # the flow happened to route to IEX. Over six sessions it was the sole
+    # blocker on 19 setups (4 of which went on to hit +2R) while only two
+    # rows qualified in total. rvol carries the liquidity test instead - it
+    # compares IEX to IEX, so the feed's share cancels out of the ratio.
+    hod_min_volume: int = 0            # cumulative IEX shares today
+    # Shares traded today on the REAL tape: SIP to 16 minutes ago plus IEX
+    # since (volume.py) - a floor on the true figure. 0 disables. Right after
+    # news breaks the 16-minute lag can hold an entry back.
+    # Off: rvol >= 5x carries the volume test. Jan-Aug 2026 IEX, same data:
+    # 500K on 53 trades +0.143R +/-0.194, -$20; off 56 trades +0.124R
+    # +/-0.187, +$9 - the three extra trades are noise either way.
+    hod_min_real_volume: int = 0
+    sip_poll_seconds: float = 60.0      # how often the live loop reads SIP
+    # Baseline liquidity: does this thing trade AT ALL on a normal day?
+    # Dropping the daily floor let dead instruments through - WVVIP, a
+    # preferred share, printed 0-1,295 shares a DAY yet showed a huge
+    # percentage move, and rvol looks enormous against a near-zero
+    # baseline. An average is not distorted by one quiet session, so it
+    # is the honest way to say "there is someone on the other side".
+    hod_min_avg_volume: int = 10_000    # 30-day average IEX shares
+    # Back to Ross's 5x. It was dropped to 3x to manufacture more trades
+    # and bought almost nothing - the strategy still only fired once every
+    # ten days - while admitting materially weaker action. Lower it again
+    # only with a measurement showing what the weaker rows are worth.
+    hod_min_rvol: float = 5.0           # relative volume vs 30-day average
+    # % gained since the 9:30 bell, not since yesterday's close. 0 disables.
+    # This is the opening drive: the stock being bought right now, rather
+    # than one that gapped overnight and has drifted since.
+    hod_min_open_pct: float = 5.0
+    hod_require_news: bool = False      # UI toggle; badge always shown
+    # Below this price a stock needs no catalyst - the user's rule for
+    # penny stocks (2026-10-26). A share offering still vetoes it, and a
+    # Chinese stock still needs breaking news (china_requires_news). 0 =
+    # news for all. Jan-Aug 2026 IEX, same data: news for all 65 trades
+    # +0.369R +$441; none under $1 68 trades +0.347R +$424 - three more
+    # penny trades, -$17 between them.
+    news_required_from_price: float = 1.0
+    # Chinese companies (and any whose country is not known yet) trade only
+    # on BREAKING news: a real catalyst at most catalyst_fresh_minutes old.
+    # Everything else needs a catalyst too, but a day-old one still counts.
+    china_requires_news: bool = True
+    # "Near the high", not "at the high". The entry is the pullback, and a
+    # healthy flag pulls back 2-5% - a 1% gate rejected most of them and
+    # only let the trade through after price had already run past the
+    # signal, which is the chasing this strategy exists to avoid.
+    hod_near_high_pct: float = 6.0      # within this % of the day high
+    hod_rows: int = 20
+    # 2, not 1. The near list is the only thing on the dashboard that says
+    # WHY nothing qualified, and with gates this tight almost nothing misses
+    # by exactly one - a 769% mover failing on float and news vanished
+    # entirely, leaving a blank panel that reads as a broken scanner. Near
+    # rows are graded for learning and never traded, so widening this
+    # changes what is seen, not what is bought.
+    near_filter_max_failures: int = 2   # dimmed "about to qualify" section
+
+    # --- entry setups (Ross Cameron micro-pullback / flat top) ---
+    # A gapper at the open has no session bars behind it, so it gets its own
+    # trigger: the first few minutes form a range, then the break of that
+    # range's high is the entry and its low is the stop.
+    orb_minutes: int = 5                 # opening range = first N min from 9:30
+    gap_min_pct: float = 10.0            # gap-up size that makes it a gapper
+    setup_lookback_bars: int = 10        # 1-min bars scanned for the swing high
+    setup_max_pullback_bars: int = 3     # 1-3 red candles, then the break
+    setup_min_pullback_pct: float = 0.4  # below this it's noise, not a pullback
+    setup_max_pullback_pct: float = 8.0  # above this the move has broken down
+    setup_flat_top_tolerance_pct: float = 0.3   # highs within this = flat top
+    require_vwap: bool = True            # never long below VWAP
+
+    # --- relative volume ---
+    rvol_baseline_days: int = 30
+    # Linear time-of-day adjustment floor: before this fraction of the
+    # session has elapsed, treat elapsed as this to avoid absurd rvol at the open.
+    rvol_min_session_fraction: float = 0.05
+
+    # --- news / catalyst quality ---
+    news_max_age_hours: float = 24.0    # headline this recent => catalyst badge
+    catalyst_min_score: float = 0.15    # below this the "news" is not a reason
+    catalyst_fresh_minutes: float = 60.0   # full weight while it is breaking
+    catalyst_veto: tuple = ("offering",)   # dilution kills the runner
+
+    # --- calendar ---
+    calendar_impacts: tuple = ("High", "Medium")  # red / orange
+    calendar_url: str = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+
+    # --- server ---
+    host: str = "127.0.0.1"
+    port: int = 8124
+
+    # --- paper-trading bot ---
+    # The broker refuses to start unless trading_base contains "paper-api";
+    # this bot must never touch a live account.
+    trading_base: str = "https://paper-api.alpaca.markets"
+    # The account to size off when there is no live reading: the backtest's
+    # balance, and the live fallback until /v2/account answers. The real
+    # account replaces it - see strategy.bankroll_from. This is NOT what one
+    # position is worth; that is bot_position_dollars below.
+    bot_bankroll: float = 2_500.0
+    # What ONE position is worth. The account decides how MANY of these fit,
+    # so a $2,473 balance holds $1,000 + $1,000 + $473 rather than putting
+    # everything into a single trade. Risk and notional are the same lever at
+    # these settings: 5% risk against a 5% stop is 100% of the unit, so the
+    # two formulas agree and neither silently overrides the other - $50 at
+    # risk per position, at any share price.
+    bot_position_dollars: float = 1_000.0
+    bot_risk_pct: float = 5.0            # % of the unit risked per position
+    bot_max_notional_pct: float = 100.0  # position size cap as % of the unit
+    # The last slice of an account takes whatever is left, but not below
+    # this: a $60 position at the 20c target grosses about $2.40 on a $1-5
+    # name and the round trip eats it.
+    bot_min_position_dollars: float = 150.0
+    # A hard ceiling in dollars, whatever the account grows to. Position
+    # size tracks the balance up to here and then stops.
+    bot_max_notional_dollars: float = 15_000.0
+    bot_max_trades_per_day: int = 10
+    # How long an accepted entry may sit unfilled before it is pulled. The
+    # setup that justified the price is stale by then, and an order left
+    # working can fill into a different market entirely.
+    bot_entry_timeout_seconds: int = 120
+    # --- scalping ---
+    # Take profit at a fixed distance in cents rather than a multiple of
+    # risk. Worth knowing what that implies: with a 5% stop the same 20c is
+    # a 4:1 reward on a $1 stock and 0.8:1 on a $5 one, because $1,000 buys
+    # five times as many shares down there. The price band is deliberately
+    # narrow for that reason, and results are reported by price bucket.
+    bot_scalp_mode: bool = True
+    bot_scalp_target_cents: float = 0.20
+    # "candle": Ross's "I will not sell just because I'm up 20 cents" - no
+    # target and no clock; out on the stop or the first chart exit
+    # indicator on a completed candle (strategy.candle_exit). Jan-Aug 2026,
+    # same 55 entries: -0.044R against the scalp's -0.220R (paired +0.176R,
+    # t=2.15) - near break-even before spread, which is not modelled.
+    # "scalp": +20c target, 65% banked, trailing runner, stall and time stops.
+    bot_exit_mode: str = "candle"
+    # The chart the candle exits read, in minutes: 1, or 5 for the 5-minute
+    # chart (clock-aligned candles built from the 1-minute bars). The stop
+    # is still checked on every print.
+    exit_candle_minutes: int = 1
+    bot_topping_tail_ratio: float = 2.0   # upper wick vs body for a topping tail
+    # Sell this share of the position at the target and let the rest run,
+    # governed by the stall exit below. 0 takes the whole thing off.
+    bot_scalp_scale_out_pct: float = 65.0
+    # After banking, the runner rides a TRAILING stop that ratchets up
+    # behind the high water mark, capped so it can never start below the
+    # entry - the trade can no longer lose, which is the point of scaling out
+    # at all, and a runner that keeps going now keeps more of it. False falls
+    # back to a fixed stop at break-even. Read by both the live bot and the
+    # simulator; when only one of them read it the two silently diverged.
+    bot_scalp_runner_trail: bool = True
+    # A doji is a bar that opens and closes in the same place - buyers and
+    # sellers balanced. Two in a row is the stall to get out on. One-minute
+    # bars are the finest the free feed carries, so a 5-10 second stutter is
+    # not observable and cannot be honestly backtested.
+    bot_doji_exit_bars: int = 2
+    bot_doji_body_pct: float = 20.0      # body <= this % of the bar's range
+    bot_max_losses_per_day: int = 4      # the day's kill switch: 4 losers, stop
+    # A ceiling on top of the capital constraint, not instead of it: the
+    # account already limits how many $1,000 units fit ($2,473 buys three).
+    # This bounds exposure if the balance grows - raise it deliberately
+    # rather than letting position count climb on its own.
+    bot_max_concurrent_positions: int = 5
+    bot_min_price: float = 0.25          # $0.25-$5, see hod_min_price
+    bot_max_price: float = 5.0
+    # Ross's stop: the low of the pullback ("my max loss is the low of the
+    # pullback"), widened to 1% if tighter - that is noise - and skipped past
+    # 8%, the deepest pullback the detector accepts. The flat 5% it replaced
+    # (min = max = 5) skipped the day's only setup three times as too wide.
+    # Jan-Aug 2026, same data: +0.143R over 53 trades against +0.028R over
+    # 48, 34% stopped against 8% - and -$20 against +$33, since a tight stop
+    # risks less than $50 once the $1,000 unit caps the size.
+    # The user's stop: the wick of the previous candle on this timeframe
+    # (clock-aligned, so 5 = the 5-minute chart), or the setup's low when
+    # that is lower. 0 = the setup's low alone. Jan-Aug 2026 IEX, 13:00
+    # window, same data: setup low 78 trades +0.143R +/-0.164 -$54, 35%
+    # stopped; 5-minute wick 66 trades +0.261R +/-0.159 +$343, 14% stopped
+    # (best of five stops tried, so read it as "not worse", not proven).
+    stop_candle_minutes: int = 5
+    bot_stop_pct: float = 5.0            # fallback stop when no setup low exists
+    bot_min_stop_pct: float = 1.0        # floor: never risk less than noise
+    bot_max_stop_pct: float = 8.0        # skip setups whose stop is this far away
+    # Regular-hours entry limit, as a % above the signal. The broker takes a
+    # two-decimal price, so under $1.67 this rounds to zero cents: the limit
+    # sits at the last trade. Live, 9 of 10 regular-hours entries filled.
+    bot_limit_slippage_pct: float = 0.3
+    # PRE-MARKET ONLY. Ross's fixed offset: buy 10c above the ask, sell 10c
+    # under the bid, because the pre-market book is thin and moves fast. Never
+    # used in regular hours. A limit is a ceiling (a floor on sells), not a
+    # price: the order still fills at the best available quote inside it.
+    bot_premarket_offset_cents: float = 0.10
+    # Pre-market the broker will not hold a stop, so the bot runs it. An exit
+    # limit that has not filled after this long is cancelled and re-priced
+    # another offset lower.
+    bot_premarket_chase_seconds: int = 5
+    # A pre-market stop exists only while the bot can see the price. A
+    # position whose tape has not printed for this long is closed. Measured
+    # from the last IEX trade, not from the poll: the poller refreshes every
+    # held symbol every few seconds whether or not anything traded.
+    bot_stale_quote_seconds: int = 30
+    # PRE-MARKET ONLY. The free feed's ask is IEX's own book - often
+    # one-sided, stale, or far from where the stock trades. An ask further
+    # than this from the last trade is ignored and the entry limit is built
+    # on the last trade instead, which is also all the replay ever sizes on.
+    bot_premarket_quote_band_pct: float = 3.0
+    # Alpaca keeps an order's shares reserved until its cancel completes, so
+    # a sell sent straight after a cancel can be refused for quantity. Wait
+    # up to this long for the cancel to settle; if it has not, try the sell
+    # again next cycle rather than send one the broker will refuse.
+    bot_cancel_settle_seconds: float = 2.0
+    bot_scale_out_r: float = 2.0         # bank half here
+    bot_runner_trail_pct: float = 5.0    # native trailing-stop width for the runner
+    # Scalp mode only: in and out within ten minutes, so even a 13:00 entry
+    # is out before the session ends. This fires far more often than the +20c target -
+    # both live scalps so far ended on the stall or the stop, neither on
+    # the target.
+    bot_time_stop_minutes: int = 10
+    # The grading horizon must match the holding horizon, or the journal
+    # labels a trade a loss while the bot is still holding it.
+    bot_alert_window_minutes: int = 10
+    # 08:00, when IEX's pre-market opens. It was switched off on 2026-09-30
+    # because the free movers list resets at the bell and could not see the
+    # day's gappers. Breaking-news discovery (main.discover_news) now finds
+    # them from the whole market's headlines instead. Pre-market positions
+    # use extended-hours limits and a stop the bot runs itself, handed to
+    # Alpaca at 09:30. "09:30" switches pre-market trading off again.
+    bot_window_open: str = "08:00"       # ET; no entries before/after the window
+    # Noon, the user's call after NCPL on 2026-10-12: stopped out at 09:42,
+    # then broke out again at 11:25 and ran to 2.66 while a 10:00 window
+    # was shut. Jan-Aug 2026 IEX, same data: 13:00 gave 66 trades +0.261R
+    # +$343; noon with everything out by 14:00 gave 61 trades +0.269R
+    # +$318. The session runs to 13:15, so a noon entry gets its candle
+    # exits for over an hour; after that the protect step's stop guards it
+    # and `flatten --at-flatten-time` closes it at 14:00.
+    bot_window_close: str = "12:00"
+    bot_flatten_time: str = "14:00"      # ET; nothing is held past this
+    # 0 = disabled. The day now ends on a loss COUNT
+    # (bot_max_losses_per_day), not a dollar figure. Worth knowing: a count
+    # bounds how many losers close, not how much is open - with 4 concurrent
+    # slots the bot can still hold 3 positions when the 4th loss trips the
+    # cap. Set this above 0 to restore a hard dollar floor.
+    bot_daily_loss_pct: float = 0.0      # kill switch: stop entering for the day
+    # Fixed bar for the hand-written heuristic only. A TRAINED model emits
+    # a calibrated probability, and with roughly a quarter of setups
+    # reaching +2R its scores sit far below 0.55 - keeping that bar made
+    # the smarter model stop trading entirely. Once trained, the bar comes
+    # from the model's own distribution instead (top quartile of what it
+    # has seen), so it re-calibrates as the model improves.
+    bot_score_threshold: float = 0.55
+    bot_score_percentile: float = 75.0
+    bot_model_min_samples: int = 40      # below this, heuristic scoring
+    learn_from_near_misses: bool = True  # grade near-miss rows too (never
+                                         # traded) so the model sees what
+                                         # separates a winner from an
+                                         # almost-winner
+    bot_journal_path: str = "cache/journal.db"
+    # The replay must cover the same hours the live session does. Training
+    # on afternoons the bot never trades would teach it a market it does not
+    # see - the same train/serve skew that argues against SIP training data.
+    backtest_open_et: str = "07:30"     # cron-job.org starts the session here
+    backtest_close_et: str = "12:30"    # session.py --until-et
+    # Simulated results live in their own journal. Mixing them into the live
+    # one would let a biased replay quietly poison what the bot has learned
+    # from real sessions, with no way to tell the two apart afterwards.
+    # The live near-list keeps rows failing one criterion, which is right
+    # for a dashboard. A sweep needs the ones failing two or three as well:
+    # otherwise it can never see what loosening a pair of gates would admit,
+    # and would only ever explore what the current settings already allow.
+    backtest_near_failures: int = 3
+    # Ross requires a catalyst, and it is the single most restrictive gate.
+    # Turning it off measures how many more setups exist without one - and
+    # whether they are worth taking, which is a different question.
+    backtest_require_news: bool = True
+    backtest_journal_path: str = "cache/backtest.db"
+    backtest_cache_dir: str = "cache/backtest"
+
+    # --- data endpoints ---
+    data_base: str = "https://data.alpaca.markets"
+    feed: str = "iex"                   # snapshots/bars feed on the free plan
+    sec_tickers_url: str = "https://www.sec.gov/files/company_tickers.json"
+    float_cache_days: int = 7
+    # A float we could not fetch is retried within the hour, not written off
+    # for a week. Unknown float is an automatic rejection, so caching a
+    # timeout as "no float" silently removes the stock from the strategy.
+    float_retry_minutes: int = 60
+    float_cache_path: str = "cache/floats.json"
+    country_cache_path: str = "cache/countries.json"   # see countries.py
+
+
+DEFAULT = Config()

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Momentum Scanner</title>
+<link rel="stylesheet" href="static/style.css?v=fdf529ca">
+</head>
+<body data-endpoint="data/status.json">
+<header>
+  <div class="brand">
+    <h1>Momentum Scanner</h1>
+    <span id="mode-badge" class="badge"></span>
+    <span id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
+  </div>
+  <div class="controls">
+    <div class="seg" id="window-toggle">
+      <button data-w="5" class="active">5m</button>
+      <button data-w="10">10m</button>
+      <button data-w="15">15m</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="require-news"> News required</label>
+    <label class="chk"><input type="checkbox" id="sound"> Sound</label>
+    <span id="clock" class="clock"></span>
+  </div>
+</header>
+
+<div id="stale-banner" class="stale-banner hidden"></div>
+
+<section class="panel bot-panel" id="bot-panel">
+  <h2>Paper Trading Bot
+    <span class="badge paper">PAPER</span>
+    <span id="bot-chips" class="bot-chips"></span>
+  </h2>
+  <div id="bot-off" class="empty">Bot is not running. Start with
+    <code>python -m scanner.main --bot</code> during market hours.</div>
+  <div id="bot-body" class="bot-grid hidden">
+    <div>
+      <h3>Today's trades</h3>
+      <table id="bot-trades">
+        <thead><tr>
+          <th>Time</th><th>Symbol</th><th class="num">Qty</th>
+          <th class="num">Entry</th><th class="num">Exit</th>
+          <th class="num">R</th><th class="num">PnL</th><th>Via</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="bot-no-trades" class="empty hidden">No trades yet today.</p>
+    </div>
+    <div>
+      <h3>Learning</h3>
+      <ul id="bot-learning" class="learning"></ul>
+    </div>
+    <div>
+      <h3>Equity <span class="sub">(paper account)</span></h3>
+      <svg id="bot-equity" viewBox="0 0 260 80" preserveAspectRatio="none"></svg>
+      <p class="empty" style="padding-top:4px">Paper fills ignore slippage —
+      treat PnL as an upper bound.</p>
+    </div>
+    <div class="bot-hist">
+      <h3>Trade history <span class="sub">recent closed trades</span></h3>
+      <table id="bot-history" class="collapsed">
+        <thead><tr>
+          <th>Date</th><th>Symbol</th><th>Setup</th><th class="num">Bought</th>
+          <th class="num">Exit</th><th class="num">P&amp;L</th>
+          <th class="num">R</th><th>Via</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="bot-history-empty" class="empty hidden">No closed trades yet.</p>
+      <button id="bot-history-more" class="more-btn hidden"></button>
+    </div>
+    <div class="bot-hist">
+      <h3>Open orders <span class="sub">live at the broker</span></h3>
+      <table id="bot-orders">
+        <thead><tr>
+          <th>Symbol</th><th>Side</th><th>Type</th><th class="num">Qty</th>
+          <th class="num">Limit</th><th class="num">Stop</th><th>Status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="bot-orders-empty" class="empty hidden">No open orders.</p>
+    </div>
+    <div class="bot-hist">
+      <h3>Alerts <span class="sub">every setup it studied — this is the learning data</span></h3>
+      <table id="bot-alerts" class="collapsed">
+        <thead><tr>
+          <th>Date</th><th>Time</th><th>Symbol</th><th class="num">Price</th>
+          <th>Setup</th><th>Source</th><th>Outcome</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="bot-alerts-empty" class="empty hidden">No alerts recorded yet.</p>
+      <button id="bot-alerts-more" class="more-btn hidden"></button>
+    </div>
+  </div>
+</section>
+
+<main>
+  <section class="panel">
+    <h2>Top Gainers <span id="gainer-window-label" class="sub">last 5 min</span></h2>
+    <table id="gainers">
+      <thead><tr>
+        <th>Symbol</th><th class="num" id="th-window">%5m</th><th class="num">%Day</th>
+        <th class="num">Price</th><th class="num">Volume</th><th class="num">RVOL</th>
+        <th class="num">Float≈</th><th>News</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="gainers-empty" class="empty hidden">Nothing moving yet.</p>
+  </section>
+
+  <section class="panel">
+    <h2>HOD Momentum <span class="sub" id="hod-criteria">Ross Cameron criteria</span></h2>
+    <table id="hod">
+      <thead><tr>
+        <th>Symbol</th><th class="num">Price</th><th class="num">%Day</th>
+        <th class="num">From HOD</th><th class="num">Volume</th><th class="num">RVOL</th>
+        <th class="num">Float≈</th><th class="num">Gap</th><th class="num">VWAP</th><th>Setup</th><th>Catalyst</th><th>News</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="hod-empty" class="empty hidden">No qualifying stocks right now.</p>
+  </section>
+
+  <aside class="panel side">
+    <h2>Economic Calendar <span class="sub">red / orange</span></h2>
+    <ul id="calendar" class="cal"></ul>
+    <h2>Headlines</h2>
+    <ul id="news" class="headlines"></ul>
+  </aside>
+</main>
+
+<footer>
+  Candidates, not buy signals. Float ≈ shares outstanding (SEC). Quotes from Alpaca's free IEX feed.
+  Not financial advice.
+</footer>
+
+<script src="static/app.js?v=479f1047"></script>
+</body>
+</html>
